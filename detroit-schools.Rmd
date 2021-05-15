@@ -1,0 +1,224 @@
+---
+title: "Detroit Schools"
+author: "Amelia Yurkofsky"
+date: "5/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Introduction
+
+First I'll load four datasets. The first three are publicly available data from the City of Detroit’s ‘Detroit’s Open Data Portal’. Two - 'Charter and EEA Schools Water Testing Results' and 'DPS Water Testing Results' - provide information on results of tests for lead in drinking water at Detroit Public Schools that were conducted in 2016. The third, 'Data from State of Michigan's Center for Educational Performance and Information,' provides information on the location and characteristics of these schools. The final is a publicly available dataset with information on neighborhood poverty and income levels. 
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages(library(readr))
+suppressPackageStartupMessages(library(dplyr))
+
+#Import water testing results (downloaded from Detroit Open Data Portal 5/8/2021)
+library(readr)
+Water_Testing_Results_charter <- read_csv("Charter_and_EEA_Schools_Water_Testing_Results.csv")
+Water_Testing_Results_charter$type <- "Charter"
+Water_Testing_Results_dps <- read_csv("DPS_Water_Testing_Results.csv")
+Water_Testing_Results_dps$type <- "DPS"
+water_testing <- rbind(Water_Testing_Results_charter[,c(1,2,7)], Water_Testing_Results_dps[,c(1,2,7)])
+
+#Import school information (downloaded from Detroit Open Data Portal 5/8/2021)
+schools_info <- read_csv("Schools__All_Schools__2018_-_2019_.csv")
+
+#list of variables to keep
+vars_keep <- names(schools_info) %in% c("EntityOfficialName", "EntityFIPSCode", "EntityOpenDate", "EntityPhysicalZip4", "type",
+                                        "EntityActualGrades", "EntityGeographicLEADistrictOffi","EntityAuthorizedEducationalSett")
+
+#drop unneeded variables
+schools_info <- schools_info[vars_keep]
+```
+
+Now I'll try to match as many as I can by school name and create a separate set of schools that weren't matched.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+#merge
+matched <- inner_join(water_testing, schools_info, by = c("school_name"="EntityOfficialName")) #matched
+unmatch <- anti_join(water_testing, schools_info, by = c("school_name"="EntityOfficialName"))[,1] 
+unmatch2 <- anti_join(schools_info, water_testing, by = c("EntityOfficialName"="school_name"))[,1]
+unmatch2 <- subset(unmatch2, !is.na(unmatch2$EntityOfficialName))
+unmatch2 <- unmatch2 %>% rename(school_name = EntityOfficialName)
+
+```
+
+Because there a significant number of school names that don't match, I'll look for 'fuzzy matches' by turning the school names into lists of words and counting common elements between each pair of names. 
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+
+suppressPackageStartupMessages(library(qdap))
+
+#using qdap's "bag_o_words" function to turn each school name into bag of words
+unmatch_bag <-sapply(unmatch$school_name, bag_o_words, simplify = TRUE)
+unmatch2_bag <- sapply(unmatch2$school_name, bag_o_words, simplify = TRUE)
+
+#count the number of shared words between each possible school name pairs 
+data <- lapply(unmatch_bag, function(x) lapply(unmatch2_bag, function(y) length(intersect(x,y))))
+
+#create data frame of results
+data2 <- data.frame(do.call(rbind, data))
+names(data2) <- unmatch2$school_name
+
+#finding schools names with best matches
+unmatch$matches <- colnames(data2)[max.col(data2,ties.method="first")]
+unmatch$matches2 <- colnames(data2)[max.col(data2,ties.method="last")]
+unmatch$matches3 <- colnames(data2)[max.col(data2,ties.method="random")]
+unmatch$final_match <- ifelse((unmatch$matches!= unmatch$matches2) &
+                              (unmatch$matches2!=unmatch$matches3) &
+                                (unmatch$matches3!= unmatch$matches), NA, unmatch$matches)
+#keep only the best match
+unmatch <- unmatch[,c(1,5)]
+unmatch <- subset(unmatch, !is.na(unmatch$final_match))
+```                              
+
+This 'fuzzy matching' technique yielded us another 96 matches, resulting in a total of 176 of the 209 water testing result schools sites matched to school location information. Spot-checking the data shows that while not every fuzzy-match is plausible, the vast majority are likely accurate.
+
+```{r}
+#How many new matches did we get?
+dim(unmatch)[1]
+
+#Spot-checking the matches
+sample_n(unmatch, 10)
+
+#joining with existing matches
+matched2 <- inner_join(unmatch, water_testing, by = "school_name") #matched
+matched2 <- inner_join(matched2, schools_info, by = c("final_match" = "EntityOfficialName"))
+matched2$final_match <- NULL
+matched <- rbind(matched, matched2)
+```
+
+
+Now I'll merge in 'Income to Poverty Ratios in Michigan by Zip Code Tabulation Area, 2013' available from Data Driven Detroit (see Appendix for link). The data gives us the percentage of the Michigan population, by zip code, under 100% of the federal poverty ratio. The histogram below shows the distribution of the population by zipcode under 100% of the federal poverty line is significantly right-skewed, with the majority of zipcodes only having below 20% of their respective populations below this threshold. 
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+poverty_ratios_2013 <- read_csv("~/911_calls/Income_to_Poverty_Ratios_in_Michigan_by_Zip_Code_Tabulation_Area,_2013.csv")
+povratio <- poverty_ratios_2013[,c(3,14)] 
+
+hist(povratio$Pct_U100)  
+
+#cleaning zip codes
+matched$zip_code <- substr(matched$EntityPhysicalZip4, 1, 5)
+matched$zip_code <- as.numeric(matched$zip_code)
+#merge
+total <- inner_join(matched, povratio, by = c("zip_code"="ZCTA5CE10"))
+
+```
+
+
+For comparison, the histogram below shows the distribution of percentage below 100% of the federal poverty line among the Detroit zip codes in the water testing data set. Here we see the majority of zip codes have 30-40% of their population below 100% of the federal poverty line. 
+```{r}
+hist(total$Pct_U100)
+```
+A boxplot of the percentage of the population by zip code below 100% of the federal poverty line shows that the average among schools with elevated lead in their water testing results is slightly higher, 37% vs. 35%, compared to schools with acceptable lead levels. The variance among schools with elevated lead levels is also smaller, with fewer values at low percentage of federal poverty level. 
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(knitr))
+
+#EDA - Water Testing Results by Federal Poverty Line
+ggplot(data = total, aes(x=as.factor(status), y=Pct_U100,
+                        color=as.factor(status))) +
+  geom_boxplot() +
+  xlab('Water Testing Result') +
+  ylab('Pct Under 100% Federal Poverity Line') +
+  ggtitle('Water Testing Result vs %<100% Federal Poverty Line')  + 
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")
+
+```
+
+We'll finish exploratory data analysis by cleaning and examining the years the school has been opened and number of grades at the school. 
+
+```{r}
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(knitr))
+
+#number of grades at the schools
+total$num_grades <- str_count(total$EntityActualGrades, ',') + 1
+
+#number of years the school has been open
+total$years_open <- year(ymd(Sys.Date()))  - year(ymd(as.Date(total$EntityOpenDate)))
+
+#table(total$EntityAuthorizedEducationalSett, useNA = "always")
+
+#EDA - Water Testing Results by Number of Grades
+ggplot(data = total, aes(x=as.factor(status), y=num_grades,
+                        color=as.factor(status))) +
+  geom_boxplot() +
+  xlab('Water Testing Result') +
+  ylab('Number of Grades') +
+  ggtitle('Water Testing Result vs Number of Grades')  + 
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")
+
+#EDA - Water Testing Results by Years Open
+ggplot(data = total, aes(x=as.factor(status), y=years_open,
+                        color=as.factor(status))) +
+  geom_boxplot() +
+  xlab('Water Testing Result') +
+  ylab('Years Open') +
+  ggtitle('Water Testing Result vs Number of Grades')  + 
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "none")
+
+#EDA - Water Testing Results by Years Open
+counts <- table(total$status, total$type)
+barplot(counts, main="School Type vs Water Testing Results",
+  xlab="School Type", col=c("darkblue","red", "green"),
+  legend = rownames(counts), beside=TRUE)
+
+#cleaning outcome variable
+total$elevated <- ifelse(total$status=="Elevated", 1, 0)
+
+#drop unneeded variables
+drop_columns <- c('EntityFIPSCode','EntityActualGrades','EntityPhysicalZip4','school_name','EntityOpenDate','status', 'zip_code',
+                  'EntityGeographicLEADistrictOff', 'EntityGeographicLEADistrictOffi','EntityAuthorizedEducationalSett')  
+total <- total[ , !(names(total) %in% drop_columns)]
+
+```
+
+We see below that there are many fewer schools with 'Acceptable' vs. 'Elevated' water testing results, 77% vs. 22%, respectively (1% of schools chose not to participate). Give we're interested in classification, I'll use over sampling the minority class. 
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages(library(caret))
+
+tabl1 <- table(total$elevated)
+kable(tabl1, caption = "Water Testing Results")
+
+#oversampling majority class
+set.seed(1123)
+up_sample <- upSample(x = total[, -ncol(total)],y = as.factor(total$elevated))                         
+table(up_sample$elevated) 
+
+trainIndex <- createDataPartition(up_sample$Class, p = .7, list = FALSE, times = 1)
+
+totalTrain <- up_sample[ trainIndex,]
+totalTest  <- up_sample[-trainIndex,]
+
+table(totalTrain$Class)
+table(totalTest$Class)
+
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+
+library(rpart)
+library(rpart.plot)
+
+mod1 <- rpart(Class ~ ., totalTrain)
+summary(mod1)
+rpart.plot(mod1)
+
+```
+
+
+# Appendix
+
+ * 'DPS Water Testing Results': https://data.detroitmi.gov/datasets/dps-water-testing-results
+ * 'Charter and EEA Schools Water Testing Results': https://data.detroitmi.gov/datasets/charter-and-eea-schools-water-testing-results 
+ * 'Data from State of Michigan's Center for Educational Performance and Information': https://data.detroitmi.gov/datasets/2018-2019-schools-eem?geometry=-83.624%2C42.271%2C-82.581%2C42.449 
+ * 'Income to Poverty Ratios in Michigan by Zip Code Tabulation Area, 2013': https://portal.datadrivendetroit.org/datasets/a57ee4c6fdd24cd686b2305f2e5bf2a8_0 
