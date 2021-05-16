@@ -245,7 +245,7 @@ library(rpart)
 library(rpart.plot)
 
 mod1 <- rpart(Class ~ ., totalTrain)
-summary(mod1)
+#summary(mod1)
 rpart.plot(mod1)
 
 ```
