@@ -2,16 +2,18 @@
 title: "Detroit Schools"
 author: "Amelia Yurkofsky"
 date: "5/6/2021"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-#Introduction
+ ## Introduction
 
-First I'll load four datasets. The first three are publicly available data from the City of Detroit’s ‘Detroit’s Open Data Portal’. Two - 'Charter and EEA Schools Water Testing Results' and 'DPS Water Testing Results' - provide information on results of tests for lead in drinking water at Detroit Public Schools that were conducted in 2016. The third, 'Data from State of Michigan's Center for Educational Performance and Information,' provides information on the location and characteristics of these schools. The final is a publicly available dataset with information on neighborhood poverty and income levels. 
+The objective of this analysis is to determine characteristics of Detroit schools that had elevated results during 2016 lead water testing. I'll use four publicly available data sets: The first three are publicly available data from the City of Detroit’s ‘Detroit’s Open Data Portal’ (two of these - 'Charter and EEA Schools Water Testing Results' and 'DPS Water Testing Results' - provide information on results of tests for lead in drinking water at 209 Detroit Public Schools that were conducted in 2016, the third, 'Data from State of Michigan's Center for Educational Performance and Information,' provides information on the location and characteristics of these schools, and the final is a publicly available data set with information on neighborhood poverty and income levels. (see Appendix for links to all sources). 
 
 ```{r, echo=TRUE, message=FALSE, warning=FALSE}
 suppressPackageStartupMessages(library(readr))
@@ -28,6 +30,15 @@ water_testing <- rbind(Water_Testing_Results_charter[,c(1,2,7)], Water_Testing_R
 #Import school information (downloaded from Detroit Open Data Portal 5/8/2021)
 schools_info <- read_csv("Schools__All_Schools__2018_-_2019_.csv")
 
+```
+ 
+ ## Preprocessing
+
+In pre-processing I'll do the following: 1) Dropping unneeded variables, 2) Merging and matching/ fuzzy-matching the data sets by school name, 3) Feature specification, 4) Tackling the class imbalance of the outcome variable.  
+
+After dropping redundant and unneeded variables, I'll focus on the following predictors: Years the school is open, type of school (public or charter), and number of grades. Later I'll merge in the percent of the population under 100% of the federal poverty ratio by zip code. 
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
 #list of variables to keep
 vars_keep <- names(schools_info) %in% c("EntityOfficialName", "EntityFIPSCode", "EntityOpenDate", "EntityPhysicalZip4", "type",
                                         "EntityActualGrades", "EntityGeographicLEADistrictOffi","EntityAuthorizedEducationalSett")
@@ -36,19 +47,19 @@ vars_keep <- names(schools_info) %in% c("EntityOfficialName", "EntityFIPSCode", 
 schools_info <- schools_info[vars_keep]
 ```
 
-Now I'll try to match as many as I can by school name and create a separate set of schools that weren't matched.
+The first attempt at merging the school water testing results and school information by school name yielded 87 (out of 209) matches. 
 
-```{r, echo=TRUE, message=FALSE, warning=FALSE}
+```{r}
 #merge
 matched <- inner_join(water_testing, schools_info, by = c("school_name"="EntityOfficialName")) #matched
 unmatch <- anti_join(water_testing, schools_info, by = c("school_name"="EntityOfficialName"))[,1] 
 unmatch2 <- anti_join(schools_info, water_testing, by = c("EntityOfficialName"="school_name"))[,1]
 unmatch2 <- subset(unmatch2, !is.na(unmatch2$EntityOfficialName))
 unmatch2 <- unmatch2 %>% rename(school_name = EntityOfficialName)
-
+dim(matched)[1]
 ```
 
-Because there a significant number of school names that don't match, I'll look for 'fuzzy matches' by turning the school names into lists of words and counting common elements between each pair of names. 
+Because there are a significant number of school names that don't match, I'll attempt a process for 'fuzzy matching' where I'll look for the number of words in common between the two lists of school names. Fist I'll turn each vector of school names into bags-of-words using the qdap package. This results in two lists of list, with each sublist containing the words of the school name without punctuation. 
 
 ```{r, echo=TRUE, message=FALSE, warning=FALSE}
 
@@ -57,14 +68,27 @@ suppressPackageStartupMessages(library(qdap))
 #using qdap's "bag_o_words" function to turn each school name into bag of words
 unmatch_bag <-sapply(unmatch$school_name, bag_o_words, simplify = TRUE)
 unmatch2_bag <- sapply(unmatch2$school_name, bag_o_words, simplify = TRUE)
+#look at first 5 school names and their associated bag-of-words
+head(unmatch_bag) 
+```
+Now I'll find the length of the intersection each possible pair of bag-of-words. This will provide the number of words that each bag has in common. Then I'll convert the results to a data frame. 
 
+```{r}
 #count the number of shared words between each possible school name pairs 
 data <- lapply(unmatch_bag, function(x) lapply(unmatch2_bag, function(y) length(intersect(x,y))))
+
+#taking a look at the first five intersections for Cesar Chaves Academy - Waterman
+#we can see no words were in common for each of the first five school names
+head(data[["Cesar Chavez Academy - Waterman"]]) 
 
 #create data frame of results
 data2 <- data.frame(do.call(rbind, data))
 names(data2) <- unmatch2$school_name
+```
 
+Now I'll find the pair of school names with the highest number of words in common. Because there are likely some schools that won't match I'll rule these out by ensuring I only match schools with one unique highest number of matches. To do this I'll take three highest numbers -- the first, last, and a random. If these return the same school name, I'll consider this the best and final match. 
+
+```{r}
 #finding schools names with best matches
 unmatch$matches <- colnames(data2)[max.col(data2,ties.method="first")]
 unmatch$matches2 <- colnames(data2)[max.col(data2,ties.method="last")]
@@ -93,8 +117,7 @@ matched2$final_match <- NULL
 matched <- rbind(matched, matched2)
 ```
 
-
-Now I'll merge in 'Income to Poverty Ratios in Michigan by Zip Code Tabulation Area, 2013' available from Data Driven Detroit (see Appendix for link). The data gives us the percentage of the Michigan population, by zip code, under 100% of the federal poverty ratio. The histogram below shows the distribution of the population by zipcode under 100% of the federal poverty line is significantly right-skewed, with the majority of zipcodes only having below 20% of their respective populations below this threshold. 
+Now I'll merge in 'Income to Poverty Ratios in Michigan by Zip Code Tabulation Area, 2013' available from Data Driven Detroit (see Appendix for link). The data gives us the percentage of the Michigan population, by zip code, under 100% of the federal poverty ratio. 
 
 ```{r, echo=TRUE, message=FALSE, warning=FALSE}
 poverty_ratios_2013 <- read_csv("~/911_calls/Income_to_Poverty_Ratios_in_Michigan_by_Zip_Code_Tabulation_Area,_2013.csv")
@@ -110,11 +133,14 @@ total <- inner_join(matched, povratio, by = c("zip_code"="ZCTA5CE10"))
 
 ```
 
+ # Exploratory Data Analysis
+ 
+The histogram below shows the distribution of the population by zip code under 100% of the federal poverty line is significantly right-skewed, with the majority of zip codes only having below 20% of their respective populations below this threshold. For comparison, the histogram below shows the distribution of percentage below 100% of the federal poverty line among the Detroit zip codes in the water testing data set. Here we see the majority of zip codes have 30-40% of their population below 100% of the federal poverty line. 
 
-For comparison, the histogram below shows the distribution of percentage below 100% of the federal poverty line among the Detroit zip codes in the water testing data set. Here we see the majority of zip codes have 30-40% of their population below 100% of the federal poverty line. 
 ```{r}
 hist(total$Pct_U100)
 ```
+
 A boxplot of the percentage of the population by zip code below 100% of the federal poverty line shows that the average among schools with elevated lead in their water testing results is slightly higher, 37% vs. 35%, compared to schools with acceptable lead levels. The variance among schools with elevated lead levels is also smaller, with fewer values at low percentage of federal poverty level. 
 
 ```{r, echo=TRUE, message=FALSE, warning=FALSE}
@@ -181,8 +207,7 @@ total <- total[ , !(names(total) %in% drop_columns)]
 
 ```
 
-We see below that there are many fewer schools with 'Acceptable' vs. 'Elevated' water testing results, 77% vs. 22%, respectively (1% of schools chose not to participate). Give we're interested in classification, I'll use over sampling the minority class. 
-
+Finally, we'll tackle class imbalances. We see below that there are many fewer schools with 'Acceptable' vs. 'Elevated' water testing results, 77% vs. 22%, respectively (1% of schools chose not to participate). Give we're interested in classification, I'll use over sampling the minority class. 
 ```{r, echo=TRUE, message=FALSE, warning=FALSE}
 suppressPackageStartupMessages(library(caret))
 
@@ -194,18 +219,28 @@ set.seed(1123)
 up_sample <- upSample(x = total[, -ncol(total)],y = as.factor(total$elevated))                         
 table(up_sample$elevated) 
 
+#creating a training and testing set
 trainIndex <- createDataPartition(up_sample$Class, p = .7, list = FALSE, times = 1)
 
 totalTrain <- up_sample[ trainIndex,]
 totalTest  <- up_sample[-trainIndex,]
 
+#checking class balance
 table(totalTrain$Class)
 table(totalTest$Class)
 
 ```
 
-```{r, echo=TRUE, message=FALSE, warning=FALSE}
+ # Methodology
 
+We'll attempt two models: 1) Classification Tree using the rpart package, and 2) Random Forest model using the random forest package.
+
+
+ # Results
+
+The classification tree shows that the most important variables are school type (charter or public) and percent poverty level. Detroit Public Schools are more likely than charter schools to have elevated lead schools, and higher percentage of the population under 100% of the federal poverty line are more likely to have elevated lead levels. 
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
 library(rpart)
 library(rpart.plot)
 
@@ -215,8 +250,7 @@ rpart.plot(mod1)
 
 ```
 
-
-# Appendix
+ # Appendix
 
  * 'DPS Water Testing Results': https://data.detroitmi.gov/datasets/dps-water-testing-results
  * 'Charter and EEA Schools Water Testing Results': https://data.detroitmi.gov/datasets/charter-and-eea-schools-water-testing-results 
