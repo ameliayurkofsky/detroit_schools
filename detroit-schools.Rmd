@@ -233,20 +233,29 @@ table(totalTest$Class)
 
  # Methodology
 
-We'll attempt two models: 1) Classification Tree using the rpart package, and 2) Random Forest model using the random forest package.
-
+We'll attempt a classification tree using the rpart package and a logistic regression. Both models has advantages in the ease of interpreting the results. 
 
  # Results
 
-The classification tree shows that the most important variables are school type (charter or public) and percent poverty level. Detroit Public Schools are more likely than charter schools to have elevated lead schools, and higher percentage of the population under 100% of the federal poverty line are more likely to have elevated lead levels. 
+Both models show two important variables: School Type (charter and public) and % of the population below 100% of the federal poverty level. 
+
+The classification tree shows that the most important variables are 1: School type (charter or public), and 2: Percent poverty level. The first split is between charter and public schools, with public schools having greater frequency of elevated lead levels than public schools. For both the public and charter school branches, the second split is percent of the population by zip code under 100% of the federal income level. In both cases the split was made at 26-27%, with higher %s of the population under federal poverty level associated with greater likelihood of elevated lead. Notable, there were no charter schools in zip codes with less than 26% of the population below the federal poverty line with elevated lead results.  
 
 ```{r, echo=TRUE, message=FALSE, warning=FALSE}
 library(rpart)
 library(rpart.plot)
 
-mod1 <- rpart(Class ~ ., totalTrain)
+mod1 <- rpart(Class ~ ., data =totalTrain)
 #summary(mod1)
 rpart.plot(mod1)
+
+```
+
+The logistic regression model shows similar results, with public schools having statistically significantly higher likelihoods of elevated lead levels, and schools in zip codes with higher percentages of the population below 100% of the federal poverty line having higher likelihoods of elevated lead levels. 
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+mod2 <- glm(Class ~ ., data = totalTrain, family = binomial (link = "logit"))
+summary(mod2)
 
 ```
 
